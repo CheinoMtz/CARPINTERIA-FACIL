@@ -67,6 +67,7 @@ button.sm{padding:10px 14px;min-height:40px;font-size:15px}
 .head h1{margin:0}.head .sub{margin:0}
 #logo{width:76px;height:76px;border-radius:50%;flex:none}
 #print-area .plogo{width:90px;height:90px;border-radius:50%;margin:0 0 8px;max-height:none}
+.paid{color:#6fae6a;font-weight:700}.debe{color:#e0b341;font-weight:700}
 </style>
 </head>
 <body>
@@ -85,7 +86,11 @@ button.sm{padding:10px 14px;min-height:40px;font-size:15px}
       <div><label>Estado del trabajo</label><select id="estado"><option>Pendiente</option><option>Aprobada</option><option>Terminada</option><option>Cancelada</option></select></div>
       <div><label>Foto o dibujo</label><input id="foto" type="file" accept="image/*"></div>
       <div id="prevBox" style="display:none;gap:12px;align-items:center"><img id="prev" class="thumb" style="width:90px;height:90px" alt=""><button class="sec sm" id="quitaFoto" type="button">Quitar foto</button></div>
+      <div><label>Vigencia de la cotización (días)</label><input id="vigencia" type="text" inputmode="numeric" value="15"></div>
       <div style="grid-column:1/-1"><label>Notas</label><textarea id="notas" rows="3" placeholder="Medidas, acabados, acuerdos…"></textarea></div>
+      <div style="grid-column:1/-1"><label>Pagos del cliente (anticipo y abonos)</label>
+        <div class="bar"><input id="pagoMonto" type="text" inputmode="decimal" placeholder="Monto $"><button class="sec" id="pagoAdd" type="button">Agregar pago</button></div>
+        <div class="scroll"><table style="min-width:320px"><tbody id="pagosTb"></tbody></table></div></div>
     </div>
 
     <div class="calc">
@@ -93,6 +98,8 @@ button.sm{padding:10px 14px;min-height:40px;font-size:15px}
       <div class="box"><small>Margen extra (material × %)</small><b id="r-margen">$0.00</b></div>
       <div class="box"><small>Subtotal sugerido</small><b id="r-sub">$0.00</b></div>
       <div class="box final"><small>PRECIO FINAL</small><b id="r-final">$0.00</b></div>
+      <div class="box"><small>Pagado</small><b id="r-pag">$0.00</b></div>
+      <div class="box"><small>Saldo pendiente</small><b id="r-saldo">$0.00</b></div>
     </div>
 
     <div class="actions">
@@ -117,6 +124,12 @@ button.sm{padding:10px 14px;min-height:40px;font-size:15px}
     </div>
     <div class="scroll"><table style="min-width:520px"><thead><tr><th>Material</th><th class="n">Cant.</th><th class="n">Precio</th><th class="n">Subtotal</th><th></th></tr></thead><tbody id="lineas"></tbody></table></div>
     <div style="text-align:right;font-size:20px;margin-top:10px">Total materiales: <b id="totMat">$0.00</b></div>
+  </div>
+
+  <div class="card">
+    <h2>Plantillas de muebles</h2>
+    <div class="bar"><select id="plSel"></select><button id="plCargar">Cargar plantilla</button><button class="sec" id="plBorrar">Borrar plantilla</button></div>
+    <div class="bar"><input id="plNombre" type="text" placeholder="Nombre (ej. Closet 2 puertas)"><button class="sec" id="plGuardar">Guardar cortes y materiales actuales</button></div>
   </div>
 
   <div class="card">
@@ -152,8 +165,8 @@ button.sm{padding:10px 14px;min-height:40px;font-size:15px}
     <div class="scroll">
       <table>
         <thead><tr>
-          <th>Fecha</th><th>Cliente</th><th>Mueble</th><th class="n hm">Piezas</th>
-          <th class="n">Material</th><th class="n hm">Margen %</th><th class="n hm">Ajuste</th><th class="n">Precio final</th><th>Foto</th><th>Estado</th><th></th>
+          <th>Folio</th><th>Fecha</th><th>Cliente</th><th>Mueble</th><th class="n hm">Piezas</th>
+          <th class="n hm">Material</th><th class="n hm">Margen %</th><th class="n hm">Ajuste</th><th class="n">Precio final</th><th class="n">Saldo</th><th>Foto</th><th>Estado</th><th></th>
         </tr></thead>
         <tbody id="tbody"></tbody>
       </table>
@@ -185,26 +198,33 @@ function calcular(){
   $("r-margen").textContent = money(extra);
   $("r-sub").textContent = money(sub);
   $("r-final").textContent = money(final);
+  const pag = pagos.reduce((t,p) => t + p.m, 0);
+  $("r-pag").textContent = money(pag);
+  $("r-saldo").textContent = (final > 0 && final - pag <= 0.005) ? "✔ Pagado" : money(Math.max(0, final - pag));
   return {x2, extra, sub, final};
 }
 
+const totalPagado = d => (d.pagos||[]).reduce((t,p) => t + p.m, 0);
+const vencida = d => (d.estado||"Pendiente") === "Pendiente" && d.vigencia > 0 && Date.now() > d.id + d.vigencia*86400000;
 function render(){
   pintaResp();
   const q = $("buscar").value.trim().toLowerCase();
-  const lista = datos.filter(d => d.cliente.toLowerCase().includes(q) || d.mueble.toLowerCase().includes(q) || (d.estado||"Pendiente").toLowerCase().includes(q));
+  const lista = datos.filter(d => d.cliente.toLowerCase().includes(q) || d.mueble.toLowerCase().includes(q) || (d.estado||"Pendiente").toLowerCase().includes(q) || (d.folio||"").toLowerCase().includes(q));
   const tb = $("tbody");
-  if(!lista.length){ tb.innerHTML = '<tr><td colspan="11" class="empty">Sin cotizaciones</td></tr>'; return; }
+  if(!lista.length){ tb.innerHTML = '<tr><td colspan="13" class="empty">Sin cotizaciones</td></tr>'; return; }
   tb.innerHTML = "";
   lista.slice().reverse().forEach(d => {
     const tr = document.createElement("tr");
     const add = (v,cls) => { const td = document.createElement("td"); td.textContent = v; if(cls) td.className = cls; tr.appendChild(td); return td; };
-    add(d.fecha); add(d.cliente); add(d.mueble); add(d.cantidad,"n hm"); add(money(d.material),"n");
+    add(d.folio || "—"); add(d.fecha); add(d.cliente); add(d.mueble); add(d.cantidad,"n hm"); add(money(d.material),"n hm");
     add(d.margen + "%","n hm"); add(money(d.ajuste),"n hm"); add(money(d.final),"n").style.fontWeight = "700";
+    const sal = d.final - totalPagado(d), pagado = d.final > 0 && sal <= 0.005;
+    add(pagado ? "✔ Pagado" : money(Math.max(0,sal)), "n " + (pagado ? "paid" : "debe"));
     const tf = document.createElement("td");
     if(d.foto){ const im = document.createElement("img"); im.src = d.foto; im.className = "thumb"; im.alt = "Foto"; im.onclick = () => abrirFoto(d.foto); tf.appendChild(im); }
     tr.appendChild(tf);
     const te = document.createElement("td"), sp = document.createElement("span"), est = d.estado || "Pendiente";
-    sp.className = "badge e-" + est; sp.textContent = est; te.appendChild(sp); tr.appendChild(te);
+    sp.className = "badge e-" + est; sp.textContent = est + (vencida(d) ? " · vencida" : ""); te.appendChild(sp); tr.appendChild(te);
     const ta = document.createElement("td"); ta.className = "acc";
     const btn = (t,cls,f) => { const b = document.createElement("button"); b.className = cls; b.textContent = t; b.onclick = f; ta.appendChild(b); };
     btn("Editar","sec sm",() => editar(d.id));
@@ -222,7 +242,25 @@ function render(){
 
 function aviso(t){ $("msg").textContent = t; setTimeout(() => $("msg").textContent = "", 2500); }
 
-let editId = null, fotoData = "";
+let editId = null, fotoData = "", pagos = [];
+const KF = "cotiz_folio";
+function maxFolio(){
+  let m = 0; try{ m = +localStorage.getItem(KF) || 0; }catch(e){}
+  datos.forEach(d => { const n = parseInt(String(d.folio||"").replace(/\D/g,"")) || 0; if(n > m) m = n; });
+  return m;
+}
+const nuevoFolio = () => "MM-" + String(maxFolio()+1).padStart(4,"0");
+function guardaFolio(f){ const n = parseInt(String(f).replace(/\D/g,"")) || 0; try{ if(n > (+localStorage.getItem(KF)||0)) localStorage.setItem(KF, n); }catch(e){} }
+function pintaPagos(){
+  const tb = $("pagosTb"); tb.innerHTML = "";
+  pagos.forEach((p,i) => tb.appendChild(fila([p.f, money(p.m)], () => { pagos.splice(i,1); pintaPagos(); })));
+  calcular();
+}
+$("pagoAdd").onclick = () => {
+  const m = nn($("pagoMonto").value);
+  if(m <= 0){ alert("Escribe el monto del pago."); return; }
+  pagos.push({f:new Date().toLocaleDateString("es-MX"), m}); $("pagoMonto").value = ""; pintaPagos();
+};
 
 function verFoto(){ $("prev").src = fotoData; $("prevBox").style.display = fotoData ? "flex" : "none"; }
 function abrirFoto(src){ $("modalImg").src = src; $("modal").style.display = "flex"; }
@@ -256,6 +294,8 @@ $("guardar").onclick = () => {
   const rec = {
     id: prev ? prev.id : Date.now(),
     fecha: prev ? prev.fecha : new Date().toLocaleDateString("es-MX"),
+    folio: prev ? (prev.folio || nuevoFolio()) : nuevoFolio(),
+    vigencia: num("vigencia"), pagos: pagos.map(p => ({f:p.f, m:p.m})),
     cliente, mueble,
     cantidad: num("cantidad"), material: num("material"), margen: num("margen"), ajuste: num("ajuste"),
     final: r.final, estado: $("estado").value, notas: $("notas").value.trim(), foto: fotoData,
@@ -269,6 +309,7 @@ $("guardar").onclick = () => {
     alert("No cupo en la memoria del navegador (casi siempre por las fotos). Exporta tu CSV, borra cotizaciones viejas o usa una foto más chica.");
     return;
   }
+  guardaFolio(rec.folio);
   const act = !!prev;
   render(); limpiar(); aviso(act ? "✔ Actualizada" : "✔ Guardada");
 };
@@ -278,7 +319,8 @@ function limpiar(){
   $("cantidad").value = 1; $("margen").value = 50; $("estado").value = "Pendiente";
   fotoData = ""; $("foto").value = ""; verFoto(); editId = null;
   $("guardar").textContent = "💾 Guardar cotización"; $("limpiar").textContent = "Limpiar";
-  lineas = []; cortes = []; pintaLineas(false); pintaCortes(); $("optRes").innerHTML = "";
+  lineas = []; cortes = []; pagos = []; $("vigencia").value = 15; $("pagoMonto").value = "";
+  pintaLineas(false); pintaCortes(); pintaPagos(); $("optRes").innerHTML = "";
   calcular();
 }
 $("limpiar").onclick = limpiar;
@@ -291,22 +333,24 @@ function editar(id){
   $("estado").value = d.estado || "Pendiente"; $("notas").value = d.notas || "";
   fotoData = d.foto || ""; $("foto").value = ""; verFoto();
   lineas = (d.lineas || []).map(l => Object.assign({}, l)); cortes = (d.cortes || []).slice();
-  pintaLineas(false); pintaCortes(); $("optRes").innerHTML = "";
+  $("vigencia").value = d.vigencia == null ? 15 : d.vigencia; pagos = (d.pagos || []).map(p => ({f:p.f, m:p.m}));
+  pintaLineas(false); pintaCortes(); pintaPagos(); $("optRes").innerHTML = "";
   $("guardar").textContent = "✏️ Actualizar cotización"; $("limpiar").textContent = "Cancelar edición";
   calcular(); window.scrollTo({top:0, behavior:"smooth"});
 }
 
 function imprimir(d){
   const ls = d.lineas || [];
+  const pg = totalPagado(d), sal = d.final - pg;
   const tabla = ls.length
     ? '<table><thead><tr><th>Material</th><th class="n">Cant.</th><th class="n">Precio</th><th class="n">Subtotal</th></tr></thead><tbody>' +
       ls.map(l => '<tr><td>'+esc(l.nombre)+'</td><td class="n">'+l.cant+'</td><td class="n">'+money(l.precio)+'</td><td class="n">'+money(l.cant*l.precio)+'</td></tr>').join("") +
       '<tr><td colspan="3"><b>Total materiales</b></td><td class="n"><b>'+money(ls.reduce((t,l)=>t+l.cant*l.precio,0))+'</b></td></tr></tbody></table>'
     : '<p><b>Materiales:</b> '+money(d.material)+'</p>';
-  $("print-area").innerHTML = '<img class="plogo" src="'+LOGO+'" alt="Muebles Martinez"><h1>Muebles Martinez</h1><h2>Cotización</h2>' +
-    '<p><b>Cliente:</b> '+esc(d.cliente)+'<br><b>Fecha:</b> '+esc(d.fecha)+'<br><b>Mueble:</b> '+esc(d.mueble)+' ('+d.cantidad+' pieza(s))</p>' +
+  $("print-area").innerHTML = '<img class="plogo" src="'+LOGO+'" alt="Muebles Martinez"><h1>Muebles Martinez</h1><h2>Cotización'+(d.folio ? ' '+esc(d.folio) : '')+'</h2>' +
+    '<p><b>Cliente:</b> '+esc(d.cliente)+'<br><b>Fecha:</b> '+esc(d.fecha)+(d.vigencia > 0 ? '<br><b>Válida hasta:</b> '+new Date(d.id + d.vigencia*86400000).toLocaleDateString("es-MX") : '')+'<br><b>Mueble:</b> '+esc(d.mueble)+' ('+d.cantidad+' pieza(s))</p>' +
     tabla + (d.notas ? '<p><b>Notas:</b> '+esc(d.notas).replace(/\n/g,"<br>")+'</p>' : '') +
-    '<div class="pf">PRECIO FINAL: '+money(d.final)+'</div>' + (d.foto ? '<img src="'+d.foto+'" alt="Foto">' : '');
+    '<div class="pf">PRECIO FINAL: '+money(d.final)+'</div>' + (pg > 0 ? '<p><b>Pagos recibidos:</b> '+(d.pagos||[]).map(p => esc(p.f)+' '+money(p.m)).join(' · ')+'<br><b>Saldo pendiente:</b> '+(sal <= 0.005 ? '$0.00 (pagado)' : money(sal))+'</p>' : '') + (d.foto ? '<img src="'+d.foto+'" alt="Foto">' : '');
   setTimeout(() => window.print(), 250);
 }
 
@@ -317,8 +361,8 @@ function tablaTexto(sep){
   const q = $("buscar").value.trim().toLowerCase();
   const lista = datos.filter(d => d.cliente.toLowerCase().includes(q) || d.mueble.toLowerCase().includes(q));
   const esc = v => sep === "," ? '"' + String(v).replace(/"/g,'""') + '"' : String(v).replace(/\t|\n/g," ");
-  const filas = [["Fecha","Cliente","Mueble","Piezas","Material","Margen %","Ajuste","Precio final","Estado","Notas"]]
-    .concat(lista.map(d => [d.fecha,d.cliente,d.mueble,d.cantidad,d.material,d.margen,d.ajuste,d.final,d.estado||"Pendiente",d.notas||""]));
+  const filas = [["Folio","Fecha","Cliente","Mueble","Piezas","Material","Margen %","Ajuste","Precio final","Pagado","Saldo","Estado","Notas"]]
+    .concat(lista.map(d => [d.folio||"",d.fecha,d.cliente,d.mueble,d.cantidad,d.material,d.margen,d.ajuste,d.final,totalPagado(d),d.final-totalPagado(d),d.estado||"Pendiente",d.notas||""]));
   return filas.map(f => f.map(esc).join(sep)).join("\n");
 }
 
@@ -356,10 +400,11 @@ function pintaCat(){
   $("catSel").innerHTML=o;$("hojaMat").innerHTML=o;
   if(a!=="")$("catSel").value=a; if(b!=="")$("hojaMat").value=b;
 }
-function fila(vals,onDel){
+function fila(vals,onDel,onEdit){
   const tr=document.createElement("tr");
   vals.forEach((v,j)=>{const td=document.createElement("td");td.textContent=v;if(j>0)td.className="n";tr.appendChild(td)});
   const td=document.createElement("td");const b=document.createElement("button");
+  if(onEdit){const e=document.createElement("button");e.className="sec sm";e.textContent="Editar";e.style.marginRight="6px";e.onclick=onEdit;td.appendChild(e)}
   b.className="del";b.textContent="Quitar";b.onclick=onDel;td.appendChild(b);tr.appendChild(td);return tr;
 }
 function pintaLineas(act){
@@ -371,7 +416,7 @@ function pintaLineas(act){
 }
 function pintaCortes(){
   const tb=$("cortes");tb.innerHTML="";
-  cortes.forEach((c,i)=>tb.appendChild(fila([c.nom||"—",c.l,c.a,c.c],()=>{cortes.splice(i,1);pintaCortes()})));
+  cortes.forEach((c,i)=>tb.appendChild(fila([c.nom||"—",c.l,c.a,c.c],()=>{cortes.splice(i,1);pintaCortes()},()=>{$("cLargo").value=c.l;$("cAncho").value=c.a;$("cCant").value=c.c;$("cNom").value=c.nom||"";cortes.splice(i,1);pintaCortes();$("cLargo").focus()})));
 }
 $("nmGuardar").onclick=()=>{
   const nombre=$("nmNombre").value.trim();
@@ -455,10 +500,44 @@ $("optim").onclick=()=>{try{
 };
 pintaCat();pintaLineas(false);pintaCortes();
 
+/* ===== Plantillas de muebles ===== */
+const KP = "cotiz_plantillas";
+let plant = [];
+try{ plant = JSON.parse(localStorage.getItem(KP)) || []; }catch(e){}
+const savePlant = () => { try{ localStorage.setItem(KP, JSON.stringify(plant)); localStorage.setItem(KM, Date.now()); }catch(e){ alert("No se pudo guardar la plantilla."); } pintaResp(); };
+function pintaPlant(){
+  $("plSel").innerHTML = plant.map((p,i) => '<option value="'+i+'">'+esc(p.nombre)+' ('+p.cortes.length+' cortes)</option>').join("") || '<option value="">(sin plantillas)</option>';
+}
+$("plGuardar").onclick = () => {
+  const nombre = $("plNombre").value.trim();
+  if(!nombre){ alert("Escribe un nombre para la plantilla."); return; }
+  if(!cortes.length && !lineas.some(l => !l.opt)){ alert("Primero agrega cortes o materiales para guardarlos."); return; }
+  const t = {nombre, mueble:$("mueble").value.trim(), hoja:$("hoja").value, kerf:$("kerf").value, rotar:$("rotar").checked,
+    cortes:cortes.map(c => ({l:c.l,a:c.a,c:c.c,nom:c.nom})), lineas:lineas.filter(l => !l.opt).map(l => ({nombre:l.nombre,precio:l.precio,cant:l.cant}))};
+  const i = plant.findIndex(p => p.nombre.toLowerCase() === nombre.toLowerCase());
+  if(i >= 0){ if(!confirm("Ya existe una plantilla con ese nombre. ¿Reemplazarla?")) return; plant[i] = t; } else plant.push(t);
+  savePlant(); pintaPlant(); $("plSel").value = i >= 0 ? i : plant.length-1; $("plNombre").value = "";
+  alert("✔ Plantilla guardada.");
+};
+$("plCargar").onclick = () => {
+  const i = $("plSel").value; if(i === "") return;
+  const t = plant[i];
+  if((cortes.length || lineas.length) && !confirm("Esto reemplaza los cortes y materiales actuales. ¿Continuar?")) return;
+  cortes = t.cortes.map(c => Object.assign({}, c)); lineas = t.lineas.map(l => Object.assign({}, l));
+  $("hoja").value = t.hoja; $("kerf").value = t.kerf; $("rotar").checked = !!t.rotar;
+  if(!$("mueble").value.trim() && t.mueble) $("mueble").value = t.mueble;
+  $("optRes").innerHTML = ""; pintaCortes(); pintaLineas(lineas.length > 0);
+};
+$("plBorrar").onclick = () => {
+  const i = $("plSel").value; if(i === "") return;
+  if(confirm("¿Borrar la plantilla '" + plant[i].nombre + "'?")){ plant.splice(+i,1); savePlant(); pintaPlant(); }
+};
+pintaPlant();
+
 /* ===== Respaldo y restauración ===== */
 function pintaResp(){
   let r=0,c=0;try{r=+localStorage.getItem(KR)||0;c=+localStorage.getItem(KM)||0}catch(e){}
-  const hay=datos.length>0||cat.length>0;
+  const hay=datos.length>0||cat.length>0||plant.length>0;
   const dias=r?Math.floor((Date.now()-r)/86400000):0, f=r?new Date(r).toLocaleDateString("es-MX"):"";
   let t,warn=false;
   if(!hay)t="Aún no hay datos que respaldar.";
@@ -471,7 +550,7 @@ function pintaResp(){
 }
 async function respaldar(){
   const nombre="respaldo-cotizador-"+new Date().toLocaleDateString("sv-SE")+".json";
-  const txt=JSON.stringify({app:"cotizador-muebles-martinez",version:1,fecha:new Date().toISOString(),cotizaciones:datos,catalogo:cat});
+  const txt=JSON.stringify({app:"cotizador-muebles-martinez",version:1,fecha:new Date().toISOString(),cotizaciones:datos,catalogo:cat,plantillas:plant});
   const file=new File([txt],nombre,{type:"application/json"});
   try{
     if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:"Respaldo del cotizador"})}
@@ -496,7 +575,10 @@ $("restFile").onchange=e=>{
     const resp=JSON.stringify(datos);
     datos=datos.concat(nuevas).sort((a,b)=>a.id-b.id);
     if(!persistir()){datos=JSON.parse(resp);alert("No cupo en la memoria del navegador. Borra cotizaciones viejas o fotos pesadas e inténtalo otra vez.");return}
-    cat=cat.concat(nuevosCat);saveCat();pintaCat();render();
+    cat=cat.concat(nuevosCat);saveCat();pintaCat();
+    const pn=new Set(plant.map(x=>String(x.nombre).toLowerCase()));
+    plant=plant.concat((Array.isArray(o.plantillas)?o.plantillas:[]).filter(x=>x&&x.nombre&&Array.isArray(x.cortes)&&Array.isArray(x.lineas)&&!pn.has(String(x.nombre).toLowerCase())));
+    savePlant();pintaPlant();guardaFolio("MM-"+maxFolio());render();
     alert("✔ Restauración lista: "+nuevas.length+" cotización(es) y "+nuevosCat.length+" material(es) agregados.");
   };
   fr.readAsText(f);
